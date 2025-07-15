@@ -42,22 +42,13 @@ class TwoLayerNet(object):
           initialization of the weights.
         - reg: Scalar giving L2 regularization strength.
         """
-        self.params = {}
+        self.params = {
+           "W1": np.random.normal(loc=0.0,scale=weight_scale, size=(input_dim, hidden_dim)),
+           "b1": np.zeros((hidden_dim,)),
+           "W2": np.random.normal(loc=0.0,scale=weight_scale, size=(hidden_dim, num_classes)),
+           "b2": np.zeros((num_classes,)),
+        }
         self.reg = reg
-
-        ############################################################################
-        # TODO: Initialize the weights and biases of the two-layer net. Weights    #
-        # should be initialized from a Gaussian centered at 0.0 with               #
-        # standard deviation equal to weight_scale, and biases should be           #
-        # initialized to zero. All weights and biases should be stored in the      #
-        # dictionary self.params, with first layer weights                         #
-        # and biases using the keys 'W1' and 'b1' and second layer                 #
-        # weights and biases using the keys 'W2' and 'b2'.                         #
-        ############################################################################
-
-        ############################################################################
-        #                             END OF YOUR CODE                             #
-        ############################################################################
 
     def loss(self, X, y=None):
         """
@@ -78,36 +69,29 @@ class TwoLayerNet(object):
         - grads: Dictionary with the same keys as self.params, mapping parameter
           names to gradients of the loss with respect to those parameters.
         """
-        scores = None
-        ############################################################################
-        # TODO: Implement the forward pass for the two-layer net, computing the    #
-        # class scores for X and storing them in the scores variable.              #
-        ############################################################################
+        out1, cache1 = affine_relu_forward(X, self.params["W1"], self.params["b1"])
+        x_logits, cache2 = affine_forward(out1, self.params["W2"], self.params["b2"])
 
-        ############################################################################
-        #                             END OF YOUR CODE                             #
-        ############################################################################
-
-        # If y is None then we are in test mode so just return scores
         if y is None:
-            return scores
+            return x_logits
+            # if we were instead supposed to return the softmax normalized probs
+            # x_logits = x_logits - np.max(x_logits, axis=-1, keepdims=True)
+            # x_prob = np.exp(x_logits)
+            # x_prob /= np.sum(x_prob, axis=-1, keepdims=True)
+            # return x_prob
 
-        loss, grads = 0, {}
-        ############################################################################
-        # TODO: Implement the backward pass for the two-layer net. Store the loss  #
-        # in the loss variable and gradients in the grads dictionary. Compute data #
-        # loss using softmax, and make sure that grads[k] holds the gradients for  #
-        # self.params[k]. Don't forget to add L2 regularization!                   #
-        #                                                                          #
-        # NOTE: To ensure that your implementation matches ours and you pass the   #
-        # automated tests, make sure that your L2 regularization includes a factor #
-        # of 0.5 to simplify the expression for the gradient.                      #
-        ############################################################################
+        loss, d_softmax = softmax_loss(x_logits, y)
 
-        ############################################################################
-        #                             END OF YOUR CODE                             #
-        ############################################################################
+        # L2 regularization loss only applied to W1 and W2
+        loss += 0.5 * self.reg * np.sum(self.params["W1"] * self.params["W1"])
+        loss += 0.5 * self.reg * np.sum(self.params["W2"] * self.params["W2"])  
 
+        grads = {}
+        dout1, grads["W2"], grads["b2"] = affine_backward(d_softmax, cache2)
+        dX, grads["W1"], grads["b1"] = affine_relu_backward(dout1, cache1)
+        
+        grads["W1"] += self.reg * self.params["W1"]
+        grads["W2"] += self.reg * self.params["W2"]
         return loss, grads
 
     def save(self, fname):

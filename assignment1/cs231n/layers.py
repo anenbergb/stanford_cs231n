@@ -22,15 +22,9 @@ def affine_forward(x, w, b):
     - out: output, of shape (N, M)
     - cache: (x, w, b)
     """
-    out = None
-    ###########################################################################
-    # TODO: Implement the affine forward pass. Store the result in out. You   #
-    # will need to reshape the input into rows.                               #
-    ###########################################################################
-
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+    N = x.shape[0]
+    x_flat = x.reshape(N, -1) # (N,D)
+    out = np.matmul(x_flat, w) + b # (N,M)
     cache = (x, w, b)
     return out, cache
 
@@ -52,14 +46,13 @@ def affine_backward(dout, cache):
     - db: Gradient with respect to b, of shape (M,)
     """
     x, w, b = cache
-    dx, dw, db = None, None, None
-    ###########################################################################
-    # TODO: Implement the affine backward pass.                               #
-    ###########################################################################
+    N = x.shape[0]
+    x_flat = x.reshape(N, -1) # (N,D)
 
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+    # (N,M) @ (M,D). the matmulis doing a sum across the M dimension
+    dx = np.matmul(dout, w.T).reshape(x.shape)
+    dw = np.matmul(x_flat.T, dout)
+    db = np.sum(dout, axis=0)
     return dx, dw, db
 
 
@@ -74,14 +67,7 @@ def relu_forward(x):
     - out: Output, of the same shape as x
     - cache: x
     """
-    out = None
-    ###########################################################################
-    # TODO: Implement the ReLU forward pass.                                  #
-    ###########################################################################
-
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+    out = np.where(x > 0, x, 0)
     cache = x
     return out, cache
 
@@ -97,14 +83,8 @@ def relu_backward(dout, cache):
     Returns:
     - dx: Gradient with respect to x
     """
-    dx, x = None, cache
-    ###########################################################################
-    # TODO: Implement the ReLU backward pass.                                 #
-    ###########################################################################
-
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+    x = cache
+    dx = np.where(x > 0, dout, 0)
     return dx
 
 
@@ -669,7 +649,7 @@ def spatial_groupnorm_backward(dout, cache):
     return dx, dgamma, dbeta
 
 
-def svm_loss(x, y):
+def svm_loss(x, y, margin=0.0):
     """
     Computes the loss and gradient using for multiclass SVM classification.
 
@@ -685,13 +665,28 @@ def svm_loss(x, y):
     """
     loss, dx = None, None
 
-    ###########################################################################
-    # TODO: Copy over your solution from A1.
-    ###########################################################################
+    num_train, num_classes = x.shape
+    # import ipdb; ipdb.set_trace()
 
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+    x_correct = x[np.arange(num_train), y].reshape(num_train, 1) # correct class scores (N,1)
+    margins = x - x_correct + margin # (N, C)
+    margins = np.where(margins > 0, margins, 0)
+    margins[np.arange(num_train), y] = 0 # don't count the loss for correct class
+    loss = np.sum(margins) / num_train
+
+    # (N,C)
+    # mask_indicator = np.where(margins > 0, np.ones_like(x), 0)
+    # mask_indicator[np.arange(num_train), y] = 0
+    # dx_nonzero = np.count_nonzero(mask_indicator, axis=-1) # (N,)
+    # dx = mask_indicator
+    # dx[np.arange(num_train), y] = -dx_nonzero
+    # dx /= num_train
+
+    mask = (margins > 0).astype(float)
+    row_sum = np.sum(mask, axis=1)
+    mask[np.arange(num_train), y] = -row_sum
+    dx = mask / num_train
+
     return loss, dx
 
 
@@ -709,13 +704,20 @@ def softmax_loss(x, y):
     - loss: Scalar giving the loss
     - dx: Gradient of the loss with respect to x
     """
-    loss, dx = None, None
 
-    ###########################################################################
-    # TODO: Copy over your solution from A1.
-    ###########################################################################
 
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+
+    num_train, num_classes = x.shape
+    # x is scores
+    scores = x - np.max(x, axis=-1, keepdims=True)
+    p = np.exp(scores)
+    p /= np.sum(p, axis=-1, keepdims=True)
+    logp = np.log(p)
+    logp_y = logp[np.arange(num_train), y]
+    loss = - np.sum(logp_y) / num_train
+
+    dx = p.copy() # (N,C)
+    dx[np.arange(num_train), y] -= 1
+    dx /= num_train
+   
     return loss, dx
