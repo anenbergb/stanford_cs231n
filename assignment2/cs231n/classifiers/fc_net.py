@@ -140,12 +140,15 @@ class FullyConnectedNet(object):
                 layer_caches.append(fc_cache)
             else:
                 bn_cache = None
+                drop_cache = None
                 if self.normalization == "batchnorm":
                     x, bn_cache = batchnorm_forward(x, self.params[f"gamma{i+1}"], self.params[f"beta{i+1}"], self.bn_params[i])
                 elif self.normalization == "layernorm":
                     x, bn_cache = layernorm_forward(x, self.params[f"gamma{i+1}"], self.params[f"beta{i+1}"], self.bn_params[i])
                 x, relu_cache = relu_forward(x)
-                layer_caches.append((fc_cache, bn_cache, relu_cache))
+                if self.use_dropout:
+                    x, drop_cache = dropout_forward(x, self.dropout_param)
+                layer_caches.append((fc_cache, bn_cache, relu_cache, drop_cache))
         
         # If test mode return early.
         if y is None or mode == "test":
@@ -162,7 +165,9 @@ class FullyConnectedNet(object):
             if i == self.num_layers - 1:
                 fc_cache = layer_caches[i]
             else:
-                fc_cache, bn_cache, relu_cache = layer_caches[i]
+                fc_cache, bn_cache, relu_cache, drop_cache = layer_caches[i]
+                if drop_cache and self.use_dropout:
+                    d_output = dropout_backward(d_output, drop_cache)
                 d_output = relu_backward(d_output, relu_cache)
                 if bn_cache and self.normalization == "batchnorm":
                     d_output, grads[f"gamma{i+1}"], grads[f"beta{i+1}"] = batchnorm_backward(d_output, bn_cache)
