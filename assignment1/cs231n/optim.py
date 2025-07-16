@@ -53,8 +53,10 @@ def sgd_momentum(w, dw, config=None):
     - learning_rate: Scalar learning rate.
     - momentum: Scalar between 0 and 1 giving the momentum value.
       Setting momentum = 0 reduces to sgd.
+      This is kind of like "friction", dampening the velocity
     - velocity: A numpy array of the same shape as w and dw used to store a
       moving average of the gradients.
+      The velocity will build up in any direction that has consistent gradient
     """
     if config is None:
         config = {}
@@ -62,15 +64,8 @@ def sgd_momentum(w, dw, config=None):
     config.setdefault("momentum", 0.9)
     v = config.get("velocity", np.zeros_like(w))
 
-    next_w = None
-    ###########################################################################
-    # TODO: Implement the momentum update formula. Store the updated value in #
-    # the next_w variable. You should also use and update the velocity v.     #
-    ###########################################################################
-
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+    v = config["momentum"] * v - config["learning_rate"] * dw
+    next_w = w + v
     config["velocity"] = v
 
     return next_w, config
@@ -78,6 +73,8 @@ def sgd_momentum(w, dw, config=None):
 
 def rmsprop(w, dw, config=None):
     """
+    https://cs231n.github.io/neural-networks-3/#sgd
+
     Uses the RMSProp update rule, which uses a moving average of squared
     gradient values to set adaptive per-parameter learning rates.
 
@@ -87,25 +84,27 @@ def rmsprop(w, dw, config=None):
       gradient cache.
     - epsilon: Small scalar used for smoothing to avoid dividing by zero.
     - cache: Moving average of second moments of gradients.
+      - moving average of per-parameter sum of squared gradients, so it's not as aggressive.
+      - normalize the gradients by dividing by cache, so that weights that have
+        large gradients effectively have learning rate reduced, and weights
+        with small gradients effectively have learning rate increased.
     """
     if config is None:
         config = {}
+    
     config.setdefault("learning_rate", 1e-2)
     config.setdefault("decay_rate", 0.99)
     config.setdefault("epsilon", 1e-8)
     config.setdefault("cache", np.zeros_like(w))
 
-    next_w = None
-    ###########################################################################
-    # TODO: Implement the RMSprop update formula, storing the next value of w #
-    # in the next_w variable. Don't forget to update cache value stored in    #
-    # config['cache'].                                                        #
-    ###########################################################################
+    decay_rate = config["decay_rate"]
+    lr = config["learning_rate"]
+    eps = config["epsilon"]
 
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
-
+    cache = decay_rate * config["cache"] + (1 - decay_rate) * dw**2
+    next_w = w - lr * dw / (np.sqrt(cache) + eps)
+    
+    config["cache"] = cache
     return next_w, config
 
 
@@ -125,6 +124,7 @@ def adam(w, dw, config=None):
     """
     if config is None:
         config = {}
+    
     config.setdefault("learning_rate", 1e-3)
     config.setdefault("beta1", 0.9)
     config.setdefault("beta2", 0.999)
@@ -133,18 +133,21 @@ def adam(w, dw, config=None):
     config.setdefault("v", np.zeros_like(w))
     config.setdefault("t", 0)
 
-    next_w = None
-    ###########################################################################
-    # TODO: Implement the Adam update formula, storing the next value of w in #
-    # the next_w variable. Don't forget to update the m, v, and t variables   #
-    # stored in config.                                                       #
-    #                                                                         #
-    # NOTE: In order to match the reference output, please modify t _before_  #
-    # using it in any calculations.                                           #
-    ###########################################################################
+    beta1 = config["beta1"]
+    beta2 = config["beta2"]
+    t = config["t"] + 1
+    lr = config["learning_rate"]
+    eps = config["epsilon"]
 
-    ###########################################################################
-    #                             END OF YOUR CODE                            #
-    ###########################################################################
+    m = beta1 * config["m"] + (1 - beta1) * dw
+    mt = m / (1 - beta1**t)
 
+    v = beta2 * config["v"] + (1 - beta2) * dw**2
+    vt = v / (1 - beta2**t)
+  
+    next_w = w - lr * mt / (np.sqrt(vt) + eps)
+
+    config["m"] = m
+    config["v"] = v
+    config["t"] = t
     return next_w, config
