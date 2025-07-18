@@ -117,9 +117,7 @@ class CaptioningRNN:
         # Weight and bias for the hidden-to-vocab transformation.
         W_vocab, b_vocab = self.params["W_vocab"], self.params["b_vocab"]
 
-        loss = 0.0
         ############################################################################
-        # TODO: Implement the forward pass for the CaptioningRNN.                  #
         # In the forward pass you will need to do the following:                   #
         # (1) Use an affine transformation to compute the initial hidden state     #
         #     from the image features. This should produce an array of shape (N, H)#
@@ -138,11 +136,18 @@ class CaptioningRNN:
         #                                                                          #
         # You also don't have to implement the backward pass.                      #
         ############################################################################
-        # 
-        ############################################################################
-        #                             END OF YOUR CODE                             #
-        ############################################################################
+        
+        # (N,D) -> (N,H)
+        initial_h = affine_forward(features, W_proj, b_proj)
 
+        # captions (N, T) -> (N,T,W)
+        embed_captions_in = word_embedding_forward(captions_in, W_embed)
+        if self.cell_type == "rnn":
+            # (N,T,H)
+            final_h = rnn_forward(embed_captions_in, initial_h, Wx, Wh, b)
+        # (N,T,H) @ (H,V) -> (N, T, V)
+        scores = temporal_affine_forward(final_h, W_vocab, b_vocab)
+        loss = temporal_softmax_loss(scores, captions_out, mask)
         return loss
 
     def sample(self, features, max_length=30):
@@ -202,8 +207,26 @@ class CaptioningRNN:
         # NOTE: we are still working over minibatches in this function. Also if   #
         # you are using an LSTM, initialize the first cell state to zeros.        #
         ###########################################################################
-        # 
-        ############################################################################
-        #                             END OF YOUR CODE                             #
-        ############################################################################
+        
+        # (N,D) -> (N,H)
+        initial_h = affine_forward(features, W_proj, b_proj)
+        start_word = self._null * torch.ones((N,1), dtype=torch.long) # (N,1)
+        
+        prev_h = initial_h
+        for t in range(max_length):
+            if t == 0:
+                prev_word = start_word
+            else:
+                prev_word = captions[:,t-1].unsqueeze(-1) # (N,1)
+            
+            prev_word_embed = word_embedding_forward(prev_word, W_embed) # (N,1,W)
+            prev_word_embed = prev_word_embed.squeeze(1) # (N,W)
+            # h is (N,H)
+            h = rnn_step_forward(prev_word_embed, prev_h, Wx, Wh, b)
+            # (N,H) @ (H,V) -> (N, V)
+            scores = affine_forward(h, W_vocab, b_vocab)
+            max_scores = scores.argmax(dim=-1) # (N,) the values are in range [O,V)
+            captions[:, t] = max_scores
+            prev_h = h
+
         return captions
