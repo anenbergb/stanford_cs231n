@@ -23,7 +23,7 @@ def affine_forward(x, w, b):
     return out
 
 
-def rnn_step_forward(x, prev_h, Wx, Wh, b):
+def rnn_step_forward(x, prev_h, Wx, Wh, b, return_cache = False):
     """Run the forward pass for a single timestep of a vanilla RNN using a tanh activation function.
 
     The input data has dimension D, the hidden state has dimension H,
@@ -39,18 +39,43 @@ def rnn_step_forward(x, prev_h, Wx, Wh, b):
     Returns a tuple of:
     - next_h: Next hidden state, of shape (N, H)
     """
-    next_h = None
-    ##############################################################################
-    # TODO: Implement a single forward step for the vanilla RNN.                 #
-    ##############################################################################
-    # 
-    ##############################################################################
-    #                               END OF YOUR CODE                             #
-    ##############################################################################
+    # (N,H)
+    inner = torch.matmul(x, Wx) + torch.matmul(prev_h, Wh) + b
+    next_h = torch.tanh(inner)
+    if return_cache:
+        cache = {
+            "x": x,
+            "prev_h": prev_h,
+            "Wx": Wx,
+            "Wh": Wh,
+            "next_h": next_h,
+        }
+        return next_h, cache
     return next_h
 
 
-def rnn_forward(x, h0, Wx, Wh, b):
+def rnn_step_backward(dnext_h, cache):
+    """
+    dnext_h shape (N, H)
+    """
+    # (N,H)
+    x = cache["x"]
+    prev_h = cache["prev_h"]
+    Wx = cache["Wx"]
+    Wh = cache["Wh"]
+    next_h = cache["next_h"]
+
+    dtanh = dnext_h * (1 - next_h**2) # (N,H)
+    dx = torch.matmul(dtanh, Wx.T) # (N,D)
+    dh = torch.matmul(dtanh, Wh.T)
+    dWx = torch.matmul(x.T, dtanh) # (D,N)x(N,H) = (D,H)
+    dWh = torch.matmul(prev_h.T, dtanh)
+    db =  torch.sum(dtanh, axis=0) # (H,)
+
+    return dx, dh, dWx, dWh, db
+
+
+def rnn_forward(x, h0, Wx, Wh, b, return_cache = False):
     """Run a vanilla RNN forward on an entire sequence of data.
     
     We assume an input sequence composed of T vectors, each of dimension D. The RNN uses a hidden
@@ -67,20 +92,57 @@ def rnn_forward(x, h0, Wx, Wh, b):
     Returns a tuple of:
     - h: Hidden states for the entire timeseries, of shape (N, T, H)
     """
-    h = None
-    ##############################################################################
-    # TODO: Implement forward pass for a vanilla RNN running on a sequence of    #
-    # input data. You should use the rnn_step_forward function that you defined  #
-    # above. You can use a for loop to help compute the forward pass.            #
-    ##############################################################################
-    # 
-    ##############################################################################
-    #                               END OF YOUR CODE                             #
-    ##############################################################################
+    N,T,D = x.shape
+    H = h0.shape[1]
+
+    caches = []
+    hidden_states = []
+    prev_h = h0
+    for i in range(T):
+        rnn_step_out = rnn_step_forward(x[:,i], prev_h,Wx,Wh,b, return_cache=return_cache)
+        if return_cache:
+            prev_h, cache = rnn_step_out
+            caches.append(cache)
+        else:
+            prev_h = rnn_step_out
+        hidden_states.append(prev_h)
+    h = torch.stack(hidden_states, dim = 1)
+
+    if return_cache:
+        return h, caches
+
     return h
 
+def rnn_backward(dh, caches):
+    """
+    dh is shape (N,T,H)
+    """
 
-def word_embedding_forward(x, W):
+    N,T,H = dh.shape
+    assert len(caches) == T
+    D = caches[0]["x"].shape[1]
+
+    dx = torch.zeros((N,T,D), dtype = dh.dtype)
+    dWx = torch.zeros((D,H), dtype = dh.dtype)
+    dWh = torch.zeros((H,H), dtype = dh.dtype)
+    db = torch.zeros((H,), dtype = dh.dtype)
+
+    d_prev_h = None
+    for i in range(T-1, -1, -1):
+        dh_i = dh[:,i] # (N,H)
+        if d_prev_h is not None:
+            dh_i = dh_i + d_prev_h    
+        dx_i, d_prev_h, dWx_i, dWh_i, db_i = rnn_step_backward(dh_i, caches[i])
+        dx[:,i] = dx_i
+        dWx += dWx_i
+        dWh += dWh_i
+        db += db_i
+
+    dh0 = d_prev_h
+    return dx, dh0, dWx, dWh, db
+
+
+def word_embedding_forward(x, W, return_cache=False):
     """Forward pass for word embeddings.
     
     We operate on minibatches of size N where
@@ -89,24 +151,56 @@ def word_embedding_forward(x, W):
 
     Inputs:
     - x: Integer array of shape (N, T) giving indices of words. Each element idx
-      of x muxt be in the range 0 <= idx < V.
+      of x must be in the range 0 <= idx < V.
     - W: Weight matrix of shape (V, D) giving word vectors for all words.
 
     Returns a tuple of:
     - out: Array of shape (N, T, D) giving word vectors for all input words.
     """
-    out = None
-    ##############################################################################
-    # TODO: Implement the forward pass for word embeddings.                      #
-    #                                                                            #
-    # HINT: This can be done in one line using Pytorch's array indexing.         #
-    ##############################################################################
-    # 
-    ##############################################################################
-    #                               END OF YOUR CODE                             #
-    ##############################################################################
+    out = W[x]
+    if return_cache:
+        cache = (x,W)
+        return out, cache
     return out
 
+def word_embedding_backward(dout, cache):
+    """
+    dout is shape (N,T,D)
+
+    dW is shape (V,D)
+
+    (N,T) indexes into W. Some words could be indexed multiple times.
+    - dout needs to be summed according to the indices of (N,T)
+    - those words that are indexed multiple times need to be summed together
+      and added to dW at the index specified by x.
+
+    Want to scatter the gradient dout back into dW at the positions specified by x
+    Some word indices may appear multiple times, so you must accumulate gradients
+     at those index positions in dW
+    """
+    x, W = cache
+    # x is (N,T)
+    N,T,D = dout.shape
+    V,D = W.shape
+
+    dW = torch.zeros_like(W) # (V,D)
+    dout_flat = dout.reshape((N*T,D))
+
+    ## index_add_ version
+    # x_flat = x.reshape((-1,)) # (N*T,)
+    # # x_flat specifies the indices in dim-0 of dW
+    # # dout_flat are the corresponding vectors that are added
+    # dW.index_add_(0, x_flat, dout_flat)
+
+    # Scatter_add version
+    # for each element in dout_flat, add it to dW at the position specified
+    # by x_flat along dim-0
+    # At row x_flat[i], column j, add dout_flat[i,j]
+    #    i indexes the flattened (N, T) time-step and batch
+    #    j indexes the embedding dimension (from 0 to D−1)
+    x_flat = x.reshape((-1, 1)).expand(-1, D) # (N*T, D)
+    dW = dW.scatter_add(0, x_flat, dout_flat)
+    return dW
 
 def lstm_step_forward(x, prev_h, prev_c, Wx, Wh, b):
     """Forward pass for a single timestep of an LSTM.

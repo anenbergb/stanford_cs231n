@@ -207,3 +207,4 @@ marimo/_lsp/
 __marimo__/
 
 assignment2/cs231n/datasets/cifar-10-batches-py
+assignment2/cs231n/datasets/coco_captioning/
