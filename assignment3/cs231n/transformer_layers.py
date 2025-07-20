@@ -27,7 +27,6 @@ class PositionalEncoding(nn.Module):
         assert embed_dim % 2 == 0
         # Create an array with a "batch dimension" of 1 (which will broadcast
         # across all examples in the batch).
-        pe = torch.zeros(1, max_len, embed_dim)
         ############################################################################
         # TODO: Construct the positional encoding array as described in            #
         # Transformer_Captioning.ipynb.  The goal is for each row to alternate     #
@@ -36,16 +35,20 @@ class PositionalEncoding(nn.Module):
         # this is what the autograder is expecting. For reference, our solution is #
         # less than 5 lines of code.                                               #
         ############################################################################
-        # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+        len_idx = torch.arange(max_len)
+        embed_idx = torch.arange(0, embed_dim, 2)
+        embed_idx_scaled = torch.pow(10000, -embed_idx / embed_dim)
+        inner = len_idx[:, None] * embed_idx_scaled[None, :] # (max_len, embed_dim / 2)
+        sin_pe = torch.sin(inner) # (max_len, embed_dim / 2)
+        cos_pe = torch.cos(inner)
+        pe = torch.stack([sin_pe, cos_pe], dim = 2).reshape((1, max_len, embed_dim))
 
-        # Get col idx range (i) and powers
-        i = torch.arange(max_len)[:, None]
-        pows = torch.pow(10000, -torch.arange(0, embed_dim, 2) / embed_dim)
-
-        # Compute positional values sin/cos
-        pe[0, :, 0::2] = torch.sin(i * pows)
-        pe[0, :, 1::2] = torch.cos(i * pows)
-
+        # maybe easier to read alternative        
+        # pe2 = torch.zeros(max_len, embed_dim)
+        # pe2[:, 0::2] = torch.sin(inner)
+        # pe2[:, 1::2] = torch.cos(inner)
+        # pe2 = pe2.unsqueeze(0)
+        
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
@@ -75,8 +78,7 @@ class PositionalEncoding(nn.Module):
         # afterward. This should only take a few lines of code.                    #
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-        output = x + self.pe[:, :S]
+        output = x + self.pe[:,:S]
         output = self.dropout(output)
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
@@ -84,6 +86,54 @@ class PositionalEncoding(nn.Module):
         #                             END OF YOUR CODE                             #
         ############################################################################
         return output
+
+
+def temporal_affine_backward(dout, x, W):
+    N, T, D = x.shape
+    No,To,M = dout.shape
+    assert No == N
+    assert To == T
+
+    db = dout.sum(dim=(0,1)) # (M,)
+    # (N,M,T) @ (N,T,D) = (N,M,D)
+    dW = dout.transpose(1,2) @ x
+    dW = torch.sum(dW, dim=0) # (M,D)
+    dx = dout @ W
+    return dx, dW, db
+
+def softmax_backward(dout, probs):
+    """
+    dL/dp = g = dout shape (N,H,S,T)
+    - derivative with respect to probs (which is output from softmax)
+    p = probs shape (N,H,S,T)
+    
+    probs = softmax(scores)
+    Goal is to take the derivative of softmax with respect to scores.
+    dL/ds where s = scores
+
+    dL/ds = J^T * dL/dp = J * dL/dp
+        J is jacobian of softmax. TxT matrix
+        J^T = J, since it's symmetric matrix
+
+        J_ij = softmax(s_i)*(indicator_ij - softmax(s_j))
+        J_ij = p_i * (indicator_ij - p_j)
+        J_ij = p_i * indicator_ij - p_i * p_j
+        J = diag(p) - p * p^T
+    
+    dL/ds = (diag(p) - pp^T) * g
+          = diag(p)*g - pp^T * g
+          = p*g      - p*(p^T * g)
+          = p * (g - p^T*g)
+    p^T*g is just dot product along T dimension
+    
+    dL/ds = p * (g - dot)
+        where dot = p^T*g
+    """
+    
+    # (N,H,S,T) .dot (N,H,S,T) = (N,H,S,1)
+    dot = torch.sum(probs * dout, dim=-1, keepdims=True)
+    d_scores = probs * (dout - dot)
+    return d_scores
 
 
 class MultiHeadAttention(nn.Module):
@@ -132,17 +182,17 @@ class MultiHeadAttention(nn.Module):
         # solution is less than 5 lines.                                           #
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
         self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
         self.dropout = nn.Dropout(p=dropout)
-        self.scale = math.sqrt(embed_dim / num_heads)
+        self.scale = 1.0 / math.sqrt(self.head_dim)
 
         # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
 
-    def forward(self, query, key, value, attn_mask=None):
+    def forward(self, query, key, value, attn_mask=None, return_cache = False):
         """
         Calculate the masked attention output for the provided data, computing
         all attention heads in parallel.
@@ -155,8 +205,9 @@ class MultiHeadAttention(nn.Module):
         - query: Input data to be used as the query, of shape (N, S, E)
         - key: Input data to be used as the key, of shape (N, T, E)
         - value: Input data to be used as the value, of shape (N, T, E)
-        - attn_mask: Array of shape (T, S) where mask[i,j] == 0 indicates token
+        - attn_mask: Array of shape (S, T) where mask[i,j] == 0 indicates token
           i in the target should not be influenced by token j in the source.
+
 
         Returns:
         - output: Tensor of shape (N, S, E) giving the weighted combination of
@@ -166,7 +217,6 @@ class MultiHeadAttention(nn.Module):
         N, S, D = query.shape
         N, T, D = value.shape
         # Create a placeholder, to be overwritten by your code below.
-        output = torch.empty((N, T, D))
         ############################################################################
         # TODO: Implement multiheaded attention using the equations given in       #
         # Transformer_Captioning.ipynb.                                            #
@@ -183,32 +233,75 @@ class MultiHeadAttention(nn.Module):
         ############################################################################
         # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-        # Get num of heads
-        H = self.num_heads
+        query_embed = self.query(query) # (N,S,D)
+        key_embed = self.key(key) # (N,T,D)
+        value_embed = self.value(value) # (N,T,D)
 
-        # Compute key, query and value matrices from sequences
-        K = self.key(key).view(N, T, H, D//H).moveaxis(1, 2)
-        Q = self.query(query).view(N, S, H, D//H).moveaxis(1, 2)
-        V = self.value(value).view(N, T, H, D//H).moveaxis(1, 2)
+        # (N,S,H,Hd) -> (N,H,S,Hd)
+        query_head = query_embed.view((N,S,self.num_heads, self.head_dim)).transpose(1,2)
+        # (N,T,H,Hd) -> (N,H,T,Hd) ->  (N,H,Hd,T)
+        key_head = key_embed.view((N,T,self.num_heads, self.head_dim)).permute((0,2,3,1))
+        value_head = value_embed.view((N,T,self.num_heads, self.head_dim)).transpose(1,2) # (N,H,T,Hd)
 
-        # (N,H,S,D/H) @ (N,H,D/H,T) -> (N,H,S,T)
-        Y = Q @ K.transpose(2, 3) / self.scale
-
+        scores = self.scale * (query_head @ key_head) # (N,H,S,Hd)@(N,H,Hd,T) = (N,H,S,T)
         if attn_mask is not None:
-            # Ensure small probabilities in softmax
-            Y = Y.masked_fill(attn_mask==0, float("-inf"))
+            # mask must be applied to the unnormalized scores, otherwise the scores for the mask tokens will be
+            # incorporated into the denominator of softmax prob.
+            scores.masked_fill_(attn_mask==0, -float('inf'))
         
-        # NOTE: Assignment says apply dropout after attention output. That does
-        # not work so dropout is applied right after softmax.
+        attn = torch.softmax(scores, dim=-1) # (N,H,S,T)
 
-        # (N,H,S,T) @ (N,H,T,D/H) -> (N,H,S,D/H)
-        Y = self.dropout(F.softmax(Y, dim=-1)) @ V
-        output = self.proj(Y.moveaxis(1, 2).reshape(N, S, D))
+        # (N,H,S,T) @ (N,H,T,Hd) = (N,H,S,Hd)
+        attn_out = attn @ value_head
+        # attn_out = self.dropout(attn_out)
+        # (N,H,S,Hd)->(N,S,H,Hd)->(N,S,D) where D=H*Hd
+        attn_out = attn_out.transpose(1,2).reshape((N,S,D))
+        output = self.proj(attn_out)
 
-        # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-        ############################################################################
-        #                             END OF YOUR CODE                             #
-        ############################################################################
+        if return_cache:
+            cache = {
+                "query": query,
+                "key": key,
+                "value": value,
+                "query_head": query_head,
+                "key_head": key_head,
+                "value_head": value_head,
+                "attn": attn,
+                "attn_out": attn_out,
+            }
+            return output, cache
+
         return output
 
 
+    def backward(self, dout, cache):
+        N,S,D = dout.shape
+
+        grads = {}
+        # (N,S,D)
+        d_attn_out, grads["proj.weight"], grads["proj.bias"] = temporal_affine_backward(dout, cache["attn_out"], self.proj.weight.data)
+        # (N,H,S,Hd)
+        d_attn_out_4d = d_attn_out.view((N,S,self.num_heads,self.head_dim)).transpose(1,2)
+
+        # (N,H,S,Hd)x(N,H,T,Hd)
+        d_attn = d_attn_out_4d @ cache["value_head"].transpose(2,3) # (N,H,S,T)
+        # (N,H,S,T)x(N,H,S,Hd)
+        d_value_head = cache["attn"].transpose(2,3) @ d_attn_out_4d # (N,H,T,Hd)
+
+        T = cache["attn"].shape[-1]
+        d_value_embed = d_value_head.transpose(1,2).reshape((N,T,D))
+        grads["value"], grads["value.weight"], grads["value.bias"] = temporal_affine_backward(d_value_embed, cache["value"], self.value.weight.data)
+
+        d_scores = softmax_backward(d_attn, cache["attn"]) # (N,H,S,T)
+
+        # (N,H,S,T) @ (N,H,Hd,T) -> (N,H,S,Hd)
+        d_query_head = self.scale * d_scores @ cache["key_head"].transpose(2,3)
+        # (N,H,S,Hd) @ (N,H,S,T) -> (N,H,Hd,T)
+        d_key_head = self.scale * cache["query_head"].transpose(2,3) @ d_scores
+
+        d_query_embed = d_query_head.transpose(1,2).reshape((N,S,D))
+        d_key_embed = d_key_head.permute((0,3,1,2)).reshape((N,T,D))
+
+        grads["query"], grads["query.weight"], grads["query.bias"] = temporal_affine_backward(d_query_embed, cache["query"], self.query.weight.data)
+        grads["key"], grads["key.weight"], grads["key.bias"] = temporal_affine_backward(d_key_embed, cache["key"], self.key.weight.data)
+        return grads

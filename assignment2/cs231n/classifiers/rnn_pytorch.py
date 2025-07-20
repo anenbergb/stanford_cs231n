@@ -210,7 +210,7 @@ class CaptioningRNN:
         
         # (N,D) -> (N,H)
         initial_h = affine_forward(features, W_proj, b_proj)
-        start_word = self._null * torch.ones((N,1), dtype=torch.long) # (N,1)
+        start_word = self._start * torch.ones((N,1), dtype=torch.long) # (N,1)
         
         prev_h = initial_h
         for t in range(max_length):
