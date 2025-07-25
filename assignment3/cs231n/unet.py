@@ -312,9 +312,9 @@ class Unet(nn.Module):
 
         for (upsample, resnet1, resnet2), skip_block_feats in zip(self.ups, skip_features[::-1]):
             x = upsample(x)
-            x = torch.cat([x, skip_block_feats[-1]], axis=1)
+            x = torch.cat([x, skip_block_feats[-1]], dim=1)
             x = resnet1(x, context)
-            x = torch.cat([x, skip_block_feats[-2]], axis=1)
+            x = torch.cat([x, skip_block_feats[-2]], dim=1)
             x = resnet2(x, context)
 
         ##################################################################

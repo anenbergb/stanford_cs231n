@@ -103,9 +103,12 @@ class GaussianDiffusion(nn.Module):
         # Look at the coeffs in `__init__` method and use the `extract` function.
         ####################################################################
         
-        alphas_cumprod = extract(self.alphas_cumprod, t, x_t.shape)
-        x_start = (x_t - torch.sqrt(1 - alphas_cumprod) * noise) / alphas_cumprod.sqrt()
-
+        # alphas_cumprod = extract(self.alphas_cumprod, t, x_t.shape)
+        # x_start = (x_t - torch.sqrt(1 - alphas_cumprod) * noise) / alphas_cumprod.sqrt()
+        
+        a_sqrt = extract(self.sqrt_alphas_cumprod, t, x_t.shape)
+        sigma = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        x_start = (x_t - sigma * noise) / a_sqrt
         ####################################################################
         return x_start
 
@@ -124,8 +127,12 @@ class GaussianDiffusion(nn.Module):
         # Transform x_t and noise to get x_start according to Eq.(4) and Eq.(14).
         # Look at the coeffs in `__init__` method and use the `extract` function.
         ####################################################################
-        alphas_cumprod = extract(self.alphas_cumprod, t, x_t.shape)
-        pred_noise = (x_t - alphas_cumprod.sqrt() * x_start) / torch.sqrt(1 - alphas_cumprod)
+        # alphas_cumprod = extract(self.alphas_cumprod, t, x_t.shape)
+        # pred_noise = (x_t - alphas_cumprod.sqrt() * x_start) / torch.sqrt(1 - alphas_cumprod)
+
+        a_sqrt = extract(self.sqrt_alphas_cumprod, t, x_t.shape)
+        sigma = extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        pred_noise = (x_t - a_sqrt * x_start) / sigma
         ####################################################################
         return pred_noise
 
@@ -185,10 +192,14 @@ class GaussianDiffusion(nn.Module):
             x_start = self.predict_start_from_noise(x_t, t, noise)
         else: # pred_x_start
             x_start = pred
-            noise = self.predict_noise_from_start(x_t, t, x_start)
+
+            # we don't need the noise
+            # noise = self.predict_noise_from_start(x_t, t, x_start)
+
+        x_start = torch.clamp(x_start, -1, 1)
 
         mean, std = self.q_posterior(x_start, x_t, t)
-        x_tm1 = mean + std * noise
+        x_tm1 = mean + std * torch.randn_like(mean)
 
         ##################################################################
 
@@ -234,11 +245,15 @@ class GaussianDiffusion(nn.Module):
         # can be done as: x_t = mu + sigma * noise where noise is sampled from N(0, 1).
         # Approximately 3 lines of code.
         ####################################################################
-        alphas_cumprod = extract(self.alphas_cumprod, t, x_start.shape)
-        alphas_cumprod_sqrt = torch.sqrt(alphas_cumprod)
-        mean = alphas_cumprod_sqrt * x_start
-        var = 1 - alphas_cumprod
-        x_t = mean + torch.sqrt(var) * noise
+        # alphas_cumprod = extract(self.alphas_cumprod, t, x_start.shape)
+        # alphas_cumprod_sqrt = torch.sqrt(alphas_cumprod)
+        # mean = alphas_cumprod_sqrt * x_start
+        # var = 1 - alphas_cumprod
+        # x_t = mean + torch.sqrt(var) * noise
+
+        a_sqrt = extract(self.sqrt_alphas_cumprod, t, x_start.shape)
+        sigma = extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+        x_t = a_sqrt * x_start + sigma * noise
         ####################################################################
         return x_t
 
