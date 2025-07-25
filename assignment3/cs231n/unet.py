@@ -1,5 +1,4 @@
 import copy
-from IPython.display import display_markdown
 from einops import rearrange
 from torch import einsum
 
@@ -171,7 +170,6 @@ class Unet(nn.Module):
         # Downsampling blocks
         ####################################################################
         for ind, (dim_in, dim_out) in enumerate(in_out):
-            down_block = None
             ##################################################################
             # TODO: Create one UNet downsampling layer `down_block` as a ModuleList.
             # It should be a ModuleList of 3 blocks [ResnetBlock, ResnetBlock, Downsample].
@@ -203,7 +201,6 @@ class Unet(nn.Module):
         # self.ups will also be a ModuleList of ModuleLists.
         # Each BlockList will contain 3 blocks [Upsample, ResnetBlock, ResnetBlock].
         for ind, (dim_in, dim_out) in enumerate(in_out_ups):
-            up_block = None
             ##################################################################
             # TODO: Create one UNet upsampling layer as a ModuleList.
             # It should be a ModuleList of 3 blocks [Upsample, ResnetBlock, ResnetBlock].
@@ -239,10 +236,14 @@ class Unet(nn.Module):
         # You will have to call self.forward two times.
         # For unconditional sampling, pass None in`text_emb`.
         ##################################################################
+        
+        uncond_model_kwargs = copy.deepcopy(model_kwargs)
+        uncond_model_kwargs["text_emb"] = None
 
-        x_cond = self.forward(x, time, model_kwargs)
-        x_uncond = self.forward(x, time, {**model_kwargs, "text_emb": None})
-        x = (1 + cfg_scale) * x_cond - cfg_scale * x_uncond
+        cond_pred = self.forward(x, time, model_kwargs)
+        uncond_pred = self.forward(x, time, uncond_model_kwargs)
+
+        x = (cfg_scale + 1) * cond_pred - cfg_scale * uncond_pred
 
         ##################################################################
 
@@ -299,21 +300,22 @@ class Unet(nn.Module):
         #    - Make sure to pass the context to each ResNet block.
         ##################################################################
 
-        # Init downs
-        x_downs = []
+        skip_features = []
+        for resnet1, resnet2, downsample in self.downs:
+            res1 = resnet1(x, context)
+            res2 = resnet2(res1, context)
+            x = downsample(res2)
+            skip_features.append((res1, res2))
+        
+        x = self.mid_block1(x, context)
+        x = self.mid_block2(x, context)
 
-        for down_block in self.downs:
-            # Save the output of the :-1 blocks for residual connections
-            x_downs.append([x := b(x, context) for b in down_block[:-1]])
-            x = down_block[-1](x)
-
-        # Apply the middle blocks in sequence with given context
-        x = self.mid_block2(self.mid_block1(x, context), context)
-
-        for up_block, xs_down in zip(self.ups, reversed(x_downs)):
-            # Upsample, make residual input pairs, apply res-blocks
-            x, pairs = up_block[0](x), zip(up_block[1:], xs_down[::-1])
-            [x := b(torch.cat([x, x0], dim=1), context) for b, x0 in pairs]
+        for (upsample, resnet1, resnet2), skip_block_feats in zip(self.ups, skip_features[::-1]):
+            x = upsample(x)
+            x = torch.cat([x, skip_block_feats[-1]], axis=1)
+            x = resnet1(x, context)
+            x = torch.cat([x, skip_block_feats[-2]], axis=1)
+            x = resnet2(x, context)
 
         ##################################################################
 
