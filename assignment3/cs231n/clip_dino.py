@@ -70,6 +70,22 @@ def clip_zero_shot_classifier(clip_model, clip_preprocess, images,
     ############################################################################
     # TODO: Find the class labels for images.                                  #
     ############################################################################
+    class_tokens = clip.tokenize(class_texts).to(device) # (N,77)
+    with torch.no_grad():
+        class_text_feats = clip_model.encode_text(class_tokens) # (N,D)
+
+    processed_images = [
+        clip_preprocess(Image.fromarray(img)).unsqueeze(0)
+        for img in images
+    ]
+    images_tensor = torch.cat(processed_images, dim=0).to(device)
+    with torch.no_grad():
+        image_features = clip_model.encode_image(images_tensor) # (N,D)
+
+    similarity = get_similarity_no_loop(class_text_feats, image_features) # (N,N)
+    similarity = similarity.detach().cpu().numpy()
+    image2class_match = np.argmax(similarity, axis=0) # argmax along the text dimension
+    pred_classes = [class_texts[i] for i in image2class_match]
 
     ############################################################################
     #                             END OF YOUR CODE                             #
@@ -98,6 +114,20 @@ class CLIPImageRetriever:
         # computation for each text query. You may end up NOT using the above      #
         # similarity function for most compute-optimal implementation.#
         ############################################################################
+        self.clip_model = clip_model
+        self.device = device
+
+        self.images = images
+        processed_images = [
+            clip_preprocess(Image.fromarray(img)).unsqueeze(0)
+            for img in images
+        ]
+        images_tensor = torch.cat(processed_images, dim=0).to(device)
+        with torch.no_grad():
+            image_features = clip_model.encode_image(images_tensor) # (N,D)
+        
+        # normalized image features
+        self.image_features = image_features / torch.sqrt(torch.sum(image_features**2, dim=1, keepdim=True))
 
 
         ############################################################################
@@ -122,7 +152,15 @@ class CLIPImageRetriever:
         ############################################################################
         # TODO: Retrieve the indices of top-k images.                              #
         ############################################################################
+        class_tokens = clip.tokenize(query).to(self.device) # (1,77)
+        with torch.no_grad():
+            class_text_feats = self.clip_model.encode_text(class_tokens) # (1,D)
 
+        class_text_feats /= torch.sqrt(torch.sum(class_text_feats**2, dim=1, keepdim=True))
+        # (1,D) x (D,N) = (1,N)
+        similarity = torch.matmul(class_text_feats, self.image_features.T).flatten()
+        _, top_indices = similarity.topk(k)
+        top_indices = top_indices.detach().cpu().tolist()
 
         ############################################################################
         #                             END OF YOUR CODE                             #
