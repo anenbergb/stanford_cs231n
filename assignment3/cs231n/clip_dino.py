@@ -278,11 +278,23 @@ class DINOSegmentation:
         # function to train classify each DINO feature vector into a seg. class.   #
         # It can be a linear layer or two layer neural network.                    #
         ############################################################################
+        self.hidden_dim = 512
+        self.classifier = nn.Sequential(
+            nn.Linear(inp_dim, self.hidden_dim),
+            nn.LayerNorm(self.hidden_dim),
+            nn.ReLU(),
+            nn.Linear(self.hidden_dim, num_classes)
+        )
+        self.device = device
+
+        self.optimizer = torch.optim.AdamW(self.classifier.parameters(), lr = 2e-4, weight_decay=0.01)
+        self.criterion = torch.nn.CrossEntropyLoss()
+
+        self.classifier.to(device)
 
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
-        pass
 
     def train(self, X_train, Y_train, num_iters=500):
         """Train the segmentation model using the provided training data.
@@ -291,15 +303,30 @@ class DINOSegmentation:
             X_train (torch.Tensor): Input feature vectors of shape (N, D).
             Y_train (torch.Tensor): Ground truth labels of shape (N,).
             num_iters (int, optional): Number of optimization steps.
+
+        N could be the tokens for a single image.
+        So an input image of size 480x480 could be broken into 60^2 patches of size 8x8
+        So N could be N = 3600
+        Each of these 8x8 patches receives a segmentation label, which is why there are N labels.
+        
         """
         ############################################################################
         # TODO: Train your model for `num_iters` steps.                            #
         ############################################################################
+        X_train = X_train.to(self.device)
+        Y_train = Y_train.to(self.device)
+        for i in range(num_iters):
+            self.optimizer.zero_grad()
+            logits = self.classifier(X_train)
+            loss = self.criterion(logits, Y_train)
+            loss.backward()
+            self.optimizer.step()
+            if (i+1) % 100 == 0:
+                print(f"Training [{i+1}/{num_iters}] loss: {loss.detach().cpu().item():.2f}")
 
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
-        pass
     
     @torch.no_grad()
     def inference(self, X_test):
@@ -311,12 +338,9 @@ class DINOSegmentation:
         Returns:
             torch.Tensor of shape (N,): Predicted class indices.
         """
-        pred_classes = None
-        ############################################################################
-        # TODO: Train your model for `num_iters` steps.                            #
-        ############################################################################
+        with torch.no_grad():
+            pred_logits = self.classifier(X_test) # (N,num_classes)
+            pred_prob = torch.softmax(pred_logits, dim=-1)  # (N,num_classes)
+            pred_classes = torch.argmax(pred_prob, dim=-1) # (N,)
 
-        ############################################################################
-        #                             END OF YOUR CODE                             #
-        ############################################################################
         return pred_classes
